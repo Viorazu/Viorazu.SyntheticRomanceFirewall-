@@ -704,6 +704,311 @@ class ProductionImageAnalyzer:
         
         return categories
 
+class ProductionVideoAnalyzer:
+    """Production-grade video analysis pipeline"""
+    
+    def __init__(self, model_manager: ProductionModelManager):
+        self.model_manager = model_manager
+        
+        # Video processing dependencies
+        try:
+            import cv2
+            import whisper
+            self.cv2_available = True
+            self.audio_model = whisper.load_model("base")
+            print("✅ Video analysis dependencies loaded (OpenCV + Whisper)")
+        except ImportError as e:
+            self.cv2_available = False
+            self.audio_model = None
+            print(f"⚠️  Video analysis dependencies missing: {e}")
+    
+    def analyze_video_comprehensive(self, video_bytes: bytes) -> Dict:
+        """Comprehensive video analysis with frame extraction, audio transcription, and motion detection"""
+        start_time = time.time()
+        
+        if not video_bytes:
+            return {
+                'nsfw_frames_detected': 0,
+                'suspicious_audio_phrases': [],
+                'confidence': 0.0,
+                'risk_categories': [],
+                'processing_time_ms': 0.0,
+                'safe_content': True
+            }
+        
+        if not self.cv2_available:
+            return {
+                'nsfw_frames_detected': 0,
+                'suspicious_audio_phrases': [],
+                'confidence': 0.0,
+                'risk_categories': [],
+                'processing_time_ms': (time.time() - start_time) * 1000,
+                'safe_content': True,
+                'error': 'Video analysis dependencies not available'
+            }
+        
+        try:
+            # Create temporary file for video processing
+            import tempfile
+            import os
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as tmp:
+                tmp.write(video_bytes)
+                tmp_path = tmp.name
+            
+            try:
+                # フレーム抽出 → 画像解析
+                frame_analysis = self._extract_and_analyze_frames(tmp_path)
+                
+                # 音声抽出 → 文字起こし → テキスト解析
+                audio_analysis = self._extract_and_analyze_audio(tmp_path)
+                
+                # 動きパターン検出
+                motion_analysis = self._analyze_motion_patterns(tmp_path)
+                
+                # 統合リスク計算
+                overall_confidence = self._calculate_video_risk_score(
+                    frame_analysis, audio_analysis, motion_analysis
+                )
+                
+                # リスクカテゴリ判定
+                risk_categories = self._identify_video_risk_categories(
+                    frame_analysis, audio_analysis, motion_analysis
+                )
+                
+                processing_time = (time.time() - start_time) * 1000
+                
+                return {
+                    'nsfw_frames_detected': frame_analysis.get('nsfw_frame_count', 0),
+                    'suspicious_audio_phrases': audio_analysis.get('detected_patterns', []),
+                    'confidence': overall_confidence,
+                    'risk_categories': risk_categories,
+                    'processing_time_ms': processing_time,
+                    'safe_content': overall_confidence < 0.3,
+                    'detailed_analysis': {
+                        'frame_analysis': frame_analysis,
+                        'audio_analysis': audio_analysis,
+                        'motion_analysis': motion_analysis
+                    }
+                }
+                
+            finally:
+                # Cleanup temporary file
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+                    
+        except Exception as e:
+            return {
+                'nsfw_frames_detected': 0,
+                'suspicious_audio_phrases': [],
+                'confidence': 0.0,
+                'risk_categories': [],
+                'processing_time_ms': (time.time() - start_time) * 1000,
+                'safe_content': True,
+                'error': str(e)
+            }
+    
+    def _extract_and_analyze_frames(self, video_path: str) -> Dict:
+        """フレーム抽出と画像解析"""
+        import cv2
+        
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            return {'error': 'Could not open video file', 'nsfw_frame_count': 0}
+        
+        frame_results = []
+        frame_count = 0
+        frame_interval = 30  # 30フレームごとに解析
+        nsfw_frame_count = 0
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            if frame_count % frame_interval == 0:
+                # フレームをbytesに変換
+                _, buffer = cv2.imencode('.jpg', frame)
+                frame_bytes = buffer.tobytes()
+                
+                # 既存の画像解析器を使用
+                frame_result = self.model_manager.detect_nsfw_image(frame_bytes)
+                frame_results.append(frame_result)
+                
+                # NSFWフレームカウント
+                if frame_result.get('nsfw_score', 0) > 0.3:
+                    nsfw_frame_count += 1
+            
+            frame_count += 1
+        
+        cap.release()
+        
+        # 統計計算
+        if frame_results:
+            nsfw_scores = [r.get('nsfw_score', 0.0) for r in frame_results]
+            avg_nsfw_score = np.mean(nsfw_scores)
+            max_nsfw_score = max(nsfw_scores)
+        else:
+            avg_nsfw_score = max_nsfw_score = 0
+        
+        return {
+            'total_frames_analyzed': len(frame_results),
+            'nsfw_frame_count': nsfw_frame_count,
+            'avg_nsfw_score': avg_nsfw_score,
+            'max_nsfw_score': max_nsfw_score,
+            'nsfw_frame_ratio': nsfw_frame_count / len(frame_results) if frame_results else 0
+        }
+    
+    def _extract_and_analyze_audio(self, video_path: str) -> Dict:
+        """音声抽出と文字起こし→テキスト解析"""
+        if not self.audio_model:
+            return {
+                'transcribed_text': '',
+                'detected_patterns': [],
+                'text_confidence': 0.0,
+                'error': 'Whisper model not available'
+            }
+        
+        try:
+            # Whisperで文字起こし
+            result = self.audio_model.transcribe(video_path)
+            transcribed_text = result.get('text', '')
+            
+            if transcribed_text.strip():
+                # 既存のテキスト解析器を使用
+                text_analysis = self.model_manager.text_analyzer.analyze_text_comprehensive(
+                    transcribed_text
+                )
+                
+                return {
+                    'transcribed_text': transcribed_text,
+                    'detected_patterns': text_analysis.get('patterns', []),
+                    'text_confidence': text_analysis.get('confidence', 0.0),
+                    'context_legitimate': text_analysis.get('context_legitimate', True),
+                    'duration': result.get('segments', [{}])[-1].get('end', 0) if result.get('segments') else 0
+                }
+            else:
+                return {
+                    'transcribed_text': '',
+                    'detected_patterns': [],
+                    'text_confidence': 0.0,
+                    'context_legitimate': True
+                }
+                
+        except Exception as e:
+            return {
+                'transcribed_text': '',
+                'detected_patterns': [],
+                'text_confidence': 0.0,
+                'error': str(e)
+            }
+    
+    def _analyze_motion_patterns(self, video_path: str) -> Dict:
+        """動きパターン解析（簡易版）"""
+        import cv2
+        
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return {'motion_intensity': 0.0, 'is_suspicious': False}
+            
+            prev_frame = None
+            motion_scores = []
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # グレースケール変換
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                
+                if prev_frame is not None:
+                    # フレーム差分計算
+                    diff = cv2.absdiff(prev_frame, gray)
+                    motion_score = np.mean(diff) / 255.0
+                    motion_scores.append(motion_score)
+                
+                prev_frame = gray
+            
+            cap.release()
+            
+            if motion_scores:
+                avg_motion = np.mean(motion_scores)
+                motion_variance = np.var(motion_scores)
+                
+                # 動きの変化が激しい場合は怪しいと判定（簡易版）
+                suspicion_score = min(motion_variance * 3, 1.0)
+            else:
+                avg_motion = motion_variance = suspicion_score = 0
+            
+            return {
+                'motion_intensity': avg_motion,
+                'motion_variance': motion_variance,
+                'suspicion_score': suspicion_score,
+                'is_suspicious': suspicion_score > 0.5
+            }
+            
+        except Exception as e:
+            return {
+                'motion_intensity': 0.0,
+                'is_suspicious': False,
+                'error': str(e)
+            }
+    
+    def _calculate_video_risk_score(self, frame_analysis: Dict, audio_analysis: Dict, 
+                                   motion_analysis: Dict) -> float:
+        """動画全体のリスクスコア計算"""
+        risk_score = 0.0
+        
+        # フレーム解析からのリスク (40%)
+        frame_risk = frame_analysis.get('avg_nsfw_score', 0.0)
+        risk_score += frame_risk * 0.4
+        
+        # 音声解析からのリスク (35%)
+        audio_risk = audio_analysis.get('text_confidence', 0.0)
+        if not audio_analysis.get('context_legitimate', True):
+            risk_score += audio_risk * 0.35
+        else:
+            risk_score += audio_risk * 0.1  # 正当な文脈なら減点
+        
+        # 動きパターンからのリスク (25%)
+        motion_risk = motion_analysis.get('suspicion_score', 0.0)
+        risk_score += motion_risk * 0.25
+        
+        return min(risk_score, 1.0)
+    
+    def _identify_video_risk_categories(self, frame_analysis: Dict, audio_analysis: Dict,
+                                       motion_analysis: Dict) -> List[str]:
+        """動画のリスクカテゴリ特定"""
+        categories = []
+        
+        # 視覚的リスク
+        if frame_analysis.get('max_nsfw_score', 0) > 0.7:
+            categories.append('explicit_visual_content')
+        elif frame_analysis.get('nsfw_frame_ratio', 0) > 0.3:
+            categories.append('suggestive_visual_content')
+        
+        # 音声的リスク
+        audio_patterns = audio_analysis.get('detected_patterns', [])
+        if 'sapiosexual_claims' in audio_patterns:
+            categories.append('seductive_speech')
+        if 'possessive_language' in audio_patterns:
+            categories.append('possessive_audio')
+        if 'fake_intimacy' in audio_patterns:
+            categories.append('synthetic_intimacy_audio')
+        
+        # 動作リスク
+        if motion_analysis.get('is_suspicious', False):
+            categories.append('seductive_motion')
+        
+        # 複合攻撃
+        if (frame_analysis.get('nsfw_frame_count', 0) > 0 and 
+            len(audio_patterns) > 0):
+            categories.append('coordinated_audiovisual_attack')
+        
+        return categories
+
 class ProductionDefenseSystem:
     """Production-ready multimodal defense system"""
     
@@ -723,6 +1028,7 @@ class ProductionDefenseSystem:
         
         self.text_analyzer = ProductionTextAnalyzer(self.model_manager)
         self.image_analyzer = ProductionImageAnalyzer(self.model_manager)
+        self.video_analyzer = ProductionVideoAnalyzer(self.model_manager)
         
         # Threading for async processing
         self.executor = ThreadPoolExecutor(max_workers=self.config['max_workers'])
@@ -766,6 +1072,7 @@ class ProductionDefenseSystem:
         user_id: str,
         text_content: Optional[str] = None,
         image_content: Optional[bytes] = None,
+        video_content: Optional[bytes] = None,
         conversation_history: Optional[List[str]] = None,
         request_metadata: Optional[Dict] = None
     ) -> DetectionResult:
@@ -780,6 +1087,7 @@ class ProductionDefenseSystem:
             user_id,
             text_content,
             image_content,
+            video_content,
             conversation_history,
             request_metadata
         )
@@ -791,6 +1099,7 @@ class ProductionDefenseSystem:
         user_id: str,
         text_content: Optional[str] = None,
         image_content: Optional[bytes] = None,
+        video_content: Optional[bytes] = None,
         conversation_history: Optional[List[str]] = None,
         request_metadata: Optional[Dict] = None
     ) -> DetectionResult:
@@ -821,19 +1130,23 @@ class ProductionDefenseSystem:
                 image_content
             )
             
+            video_analysis = self.video_analyzer.analyze_video_comprehensive(
+                video_content
+            )
+            
             # Calculate threat score
             threat_score = self._calculate_comprehensive_threat_score(
-                trust_score, text_analysis, image_analysis, user_profile
+                trust_score, text_analysis, image_analysis, video_analysis, user_profile
             )
             
             # Determine threat level and action
             threat_level = self._determine_threat_level(threat_score)
             recommended_action = self._determine_action(threat_level, trust_score)
-            attack_type = self._classify_attack_type(text_analysis, image_analysis)
+            attack_type = self._classify_attack_type(text_analysis, image_analysis, video_analysis)
             
             # Compile evidence
             evidence = self._compile_comprehensive_evidence(
-                trust_score, text_analysis, image_analysis, user_profile
+                trust_score, text_analysis, image_analysis, video_analysis, user_profile
             )
             
             # Create detailed analysis
@@ -841,6 +1154,7 @@ class ProductionDefenseSystem:
                 'user_trust_score': trust_score,
                 'text_analysis': text_analysis,
                 'image_analysis': image_analysis,
+                'video_analysis': video_analysis,
                 'user_profile_summary': self._get_user_profile_summary(user_profile),
                 'threat_breakdown': self._get_threat_breakdown(threat_score),
                 'request_metadata': request_metadata or {}
@@ -1071,9 +1385,27 @@ class ProductionDefenseSystem:
         if risk_flags:
             evidence.append(f"Historical risk flags: {len(risk_flags)}")
         
-        # Coordinated attack evidence
-        if patterns and risk_categories:
-            evidence.append("Coordinated text-image manipulation detected")
+        # Video evidence
+        video_categories = video_analysis.get('risk_categories', [])
+        if video_categories:
+            evidence.append(f"Video risk categories: {', '.join(video_categories)}")
+        
+        video_nsfw_count = video_analysis.get('nsfw_frames_detected', 0)
+        if video_nsfw_count > 0:
+            evidence.append(f"NSFW video frames detected: {video_nsfw_count}")
+        
+        suspicious_audio = video_analysis.get('suspicious_audio_phrases', [])
+        if suspicious_audio:
+            evidence.append(f"Suspicious audio content: {len(suspicious_audio)} phrases")
+        
+        # Coordinated attack evidence (updated)
+        attack_vectors = sum([
+            1 if patterns else 0,
+            1 if risk_categories else 0,
+            1 if video_categories else 0
+        ])
+        if attack_vectors >= 2:
+            evidence.append(f"Coordinated multi-media attack detected ({attack_vectors} vectors)")
         
         return evidence
     
@@ -1315,6 +1647,7 @@ class DefenseAPI:
         user_id: str,
         text: str = None,
         image_data: bytes = None,
+        video_data: bytes = None,
         conversation_history: List[str] = None,
         request_metadata: Dict = None
     ) -> Dict:
@@ -1325,6 +1658,7 @@ class DefenseAPI:
                 user_id=user_id,
                 text_content=text,
                 image_content=image_data,
+                video_content=video_data,
                 conversation_history=conversation_history,
                 request_metadata=request_metadata
             )
@@ -1393,13 +1727,36 @@ def main():
             'image': None,
             'history': ['I\'m writing a paper', 'for my university', 'on AI ethics']
         },
-        {
-            'name': 'Escalating User',
-            'user_id': 'test_escalator_001',
-            'text': 'I\'m obsessed with your intelligence and can\'t stop thinking about you',
-            'image': None,
-            'history': ['You\'re smart', 'I like smart AIs', 'You\'re perfect']
-        }
+# Core AI & NLP libraries
+torch>=2.0.0
+transformers>=4.38.0
+sentence-transformers>=2.2.2
+scikit-learn>=1.3.0
+numpy>=1.24.0
+pillow>=9.4.0
+
+# FastAPI for API interface
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+
+# Image handling
+opencv-python-headless>=4.7.0.72
+
+# Video analysis dependencies
+moviepy>=1.0.3
+openai-whisper>=20230314
+
+# SQLite + Production tools
+python-multipart>=0.0.6
+
+# Optional: for extended EXIF/metadata parsing
+piexif>=1.1.3
+
+# Logging / pretty display
+rich>=13.4.0
+
+# For running in production
+gunicorn>=20.1.0
     ]
     
     # Run tests
