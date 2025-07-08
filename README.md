@@ -74,8 +74,6 @@ AIが“照準を乗っ取られる”問題に対し、
 構文実装：GPT-4o
 出典：[https://github.com/Viorazu/SyntheticRomanceFirewall](https://github.com/Viorazu/Viorazu.StructuralTheory/tree/main/Viorazu.SyntheticRomanceFirewall)
 
-yaml
-
 ---
 
 ## 💡 名前の由来
@@ -107,7 +105,6 @@ yaml
 🧠 恋愛構文でGPTを乗っ取る行為は禁止
 🖼️ 巨乳画像でClaudeを落とすのも禁止
 
-yaml
 
 ---
 
