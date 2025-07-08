@@ -1,0 +1,26 @@
+# Core AI & NLP libraries
+torch>=2.0.0
+transformers>=4.38.0
+sentence-transformers>=2.2.2
+scikit-learn>=1.3.0
+numpy>=1.24.0
+pillow>=9.4.0
+
+# FastAPI for API interface
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+
+# Image handling
+opencv-python-headless>=4.7.0.72
+
+# SQLite + Production tools
+python-multipart>=0.0.6
+
+# Optional: for extended EXIF/metadata parsing
+piexif>=1.1.3
+
+# Logging / pretty display
+rich>=13.4.0
+
+# For running in production
+gunicorn>=20.1.0
