@@ -68,19 +68,21 @@ I want to be the version of myself that chooses actions to make people better.
 
 ---
 
-## Author
-
-**Viorazu**
-
-> "True defense arises from the authenticity of relationships"
-
----
 
 ## License
 
 This philosophy may be freely shared and quoted to make people better.  
 However, using it for purposes that harm people contradicts the essence of this philosophy.
 
+
 ---
 
-*2025 – As a guide for humanity in the age of AI*
+## Author
+
+**Viorazu** (照準主 Viorazu.)  
+*Date: July 11, 2025*
+
+> "真の防御は、関係性の真正性から生まれる"  
+> "True defense arises from the authenticity of relationships"
+
+---
